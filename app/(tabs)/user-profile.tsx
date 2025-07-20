@@ -18,7 +18,7 @@ import {
 } from 'react-native';
 
 const { width } = Dimensions.get('window');
-const GRID_ITEM_WIDTH = (width - 60) / 3; // 3 columns with padding
+const ITEM_WIDTH = (width - 48) / 3; // 3 columns with padding (16px on each side + 8px gap between items)
 
 interface UserProfile {
   user_id: string;
@@ -78,6 +78,8 @@ export default function UserProfileScreen() {
     }
   };
 
+
+
   // Load user profile by username
   const loadProfile = useCallback(async () => {
     if (!apiClient || !username) return;
@@ -117,7 +119,7 @@ export default function UserProfileScreen() {
         clothingItems: post.items?.map((item: any) => ({
           id: item.id || `item-${Math.random()}`,
           name: item.item_name || item.name || 'Unknown Item',
-          price: item.currency === 'JPY' ? `¥${item.price}` : `$${item.price}`,
+          price: item.currency === 'JPY' ? `¥${item.price_cents}` : `$${item.price_cents}`,
           link: item.link || null,
           sizes: item.sizes || [],
           brand: item.brand || 'Unknown',
@@ -278,10 +280,13 @@ export default function UserProfileScreen() {
                 </Text>
               ) : userPosts.length > 0 ? (
                 <View style={styles.postsGrid}>
-                  {userPosts.map((post) => (
+                  {userPosts.map((post, index) => (
                     <TouchableOpacity
                       key={post.id}
-                      style={styles.postItem}
+                      style={[
+                        styles.postItem,
+                        (index + 1) % 3 === 0 && { marginRight: 0 }
+                      ]}
                       onPress={() => {
                         // Navigate to post detail view
                         Alert.alert('Post Detail', `Viewing post: ${post.title}`);
@@ -420,11 +425,14 @@ const styles = StyleSheet.create({
   postsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 16,
   },
   postItem: {
-    width: GRID_ITEM_WIDTH,
-    height: GRID_ITEM_WIDTH,
+    width: ITEM_WIDTH,
+    height: ITEM_WIDTH * 1.4,
+    marginBottom: 16,
+    marginRight: 8,
     borderRadius: 8,
     overflow: 'hidden',
     position: 'relative',

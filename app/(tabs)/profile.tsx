@@ -39,7 +39,7 @@ interface UserProfile {
 interface ClothingItem {
   id: string;
   name: string;        // Maps to item_name in DB
-  price: string;       // Maps to price (converted to integer) in DB 
+  price: string;       // Maps to price (formatted currency string) in DB 
   link: string;        // Maps to link in DB
   sizes: string[];     // Maps to sizes in DB
   brand: string;       // Maps to brand in DB
@@ -108,6 +108,8 @@ export default function ProfileScreen() {
     }
   };
 
+
+
   // Load user profile from API
   const loadProfile = useCallback(async () => {
     if (!apiClient) return;
@@ -145,7 +147,7 @@ export default function ProfileScreen() {
         clothingItems: post.items?.map((item: any) => ({
           id: item.id || `item-${Math.random()}`,
           name: item.item_name || item.name || 'Unknown Item',
-          price: item.currency === 'JPY' ? `¥${item.price}` : `$${item.price}`,
+          price: item.currency === 'JPY' ? `¥${item.price_cents}` : `$${item.price_cents}`,
           link: item.link || null,
           sizes: item.sizes || [],
           brand: item.brand || 'Unknown',

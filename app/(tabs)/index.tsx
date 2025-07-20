@@ -32,7 +32,7 @@ const ITEM_WIDTH = (width - 48) / 2; // 2 columns with padding
 interface ClothingItem {
   id: string;
   name: string;        // Maps to item_name in DB
-  price: string;       // Maps to price (converted to integer) in DB 
+  price: string;       // Maps to price (formatted currency string) in DB 
   link: string;        // Maps to link in DB
   sizes: string[];     // Maps to sizes in DB
   brand: string;       // Maps to brand in DB
@@ -47,6 +47,7 @@ interface FeedItem {
   title?: string;
   description?: string;
   author: {
+    id: string; // User ID for fetching profile
     handle: string;
     avatar_url?: string;
   };
@@ -88,6 +89,16 @@ export default function FeedScreen() {
   const [imageRetryCount, setImageRetryCount] = useState<{ [key: string]: number }>({});
   const [imageCache, setImageCache] = useState<{ [key: string]: string }>({});
   const [pressedDotId, setPressedDotId] = useState<string | null>(null);
+  const [profilePreview, setProfilePreview] = useState<{
+    user_id: string;
+    username: string;
+    avatar_url: string | null;
+    bio: string | null;
+    height_cm: number | null;
+    chest_cm: number | null;
+    waist_cm: number | null;
+  } | null>(null);
+  const [isProfilePreviewVisible, setIsProfilePreviewVisible] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const searchAnimation = useRef(new Animated.Value(0)).current;
   const viewTransitionAnimation = useRef(new Animated.Value(0)).current; // 0 = grid, 1 = vertical
@@ -118,6 +129,8 @@ export default function FeedScreen() {
       }
     }
   };
+
+
 
 
 
@@ -237,7 +250,7 @@ export default function FeedScreen() {
         clothingItems: post.items?.map((item: any) => ({
           id: item.id || `item-${Math.random()}`, // Generate ID if missing
           name: item.item_name || item.name || 'Unknown Item',
-          price: item.currency === 'JPY' ? `¥${item.price}` : `$${item.price}`,
+          price: item.currency === 'JPY' ? `¥${item.price_cents}` : `$${item.price_cents}`,
           link: item.link || null,
           sizes: item.sizes || [],
           brand: item.brand || 'Unknown',
@@ -297,7 +310,7 @@ export default function FeedScreen() {
         clothingItems: post.items?.map((item: any) => ({
           id: item.id || `item-${Math.random()}`, // Generate ID if missing
           name: item.item_name || item.name || 'Unknown Item',
-          price: item.currency === 'JPY' ? `¥${item.price}` : `$${item.price}`,
+          price: item.currency === 'JPY' ? `¥${item.price_cents}` : `$${item.price_cents}`,
           link: item.link || null,
           sizes: item.sizes || [],
           brand: item.brand || 'Unknown',
@@ -512,6 +525,7 @@ export default function FeedScreen() {
       return;
     }
 
+    // Parse the price from the formatted string
     const priceNumber = parseInt(item.price.replace(/[^0-9]/g, ''));
     
     const cartItem = {
@@ -538,12 +552,31 @@ export default function FeedScreen() {
     setSelectedSize('');
   };
 
-  const handleUsernameTap = (post: FeedItem) => {
-    // Navigate to user profile using the handle/username
-    router.push({
-      pathname: '/(tabs)/user-profile',
-      params: { username: post.author.handle }
-    });
+  const handleUsernameTap = async (post: FeedItem) => {
+    if (!post.author.id) {
+      // Fallback to navigation if no user ID available
+      router.push({
+        pathname: '/(tabs)/user-profile',
+        params: { username: post.author.handle }
+      });
+      return;
+    }
+
+    try {
+      // Fetch profile using the user ID
+      const response = await apiClient.getProfile(post.author.id);
+      if (response.profile) {
+        setProfilePreview(response.profile);
+        setIsProfilePreviewVisible(true);
+      }
+    } catch (error) {
+      console.error('Failed to fetch profile preview:', error);
+      // Fallback to navigation
+      router.push({
+        pathname: '/(tabs)/user-profile',
+        params: { username: post.author.handle }
+      });
+    }
   };
 
   // Grid view post component
@@ -1139,6 +1172,95 @@ export default function FeedScreen() {
           </View>
         </View>
       )}
+
+      {/* Profile Preview Modal */}
+      {isProfilePreviewVisible && profilePreview && (
+        <View style={styles.modalOverlay}>
+          <View style={[styles.profileModal, { backgroundColor: colorScheme === 'dark' ? '#222' : '#fff' }]}>
+            <TouchableOpacity 
+              style={styles.closeButton}
+              onPress={() => setIsProfilePreviewVisible(false)}
+            >
+              <IconSymbol name="xmark" size={20} color={colorScheme === 'dark' ? '#fff' : '#000'} />
+            </TouchableOpacity>
+            
+            {/* Profile Header */}
+            <View style={styles.profileModalHeader}>
+              <View style={styles.profileModalAvatar}>
+                {profilePreview.avatar_url ? (
+                  <Image source={{ uri: profilePreview.avatar_url }} style={styles.profileModalAvatarImage} />
+                ) : (
+                  <View style={[styles.profileModalAvatarPlaceholder, { backgroundColor: colorScheme === 'dark' ? '#333' : '#f0f0f0' }]}>
+                    <IconSymbol name="person.fill" size={24} color={colorScheme === 'dark' ? '#666' : '#999'} />
+                  </View>
+                )}
+              </View>
+              <Text style={[styles.profileModalUsername, { color: colorScheme === 'dark' ? '#fff' : '#000' }]}>
+                @{profilePreview.username}
+              </Text>
+            </View>
+
+            {/* Bio Section */}
+            <View style={styles.profileModalBio}>
+              <Text style={[styles.profileModalBioLabel, { color: colorScheme === 'dark' ? '#fff' : '#000' }]}>
+                Bio
+              </Text>
+              <Text style={[styles.profileModalBioText, { color: colorScheme === 'dark' ? '#ccc' : '#666' }]}>
+                {profilePreview.bio || 'No bio available'}
+              </Text>
+            </View>
+
+            {/* Measurements */}
+            <View style={styles.profileModalMeasurements}>
+              <Text style={[styles.profileModalMeasurementsLabel, { color: colorScheme === 'dark' ? '#fff' : '#000' }]}>
+                Measurements
+              </Text>
+              <View style={styles.profileModalMeasurementsGrid}>
+                <View style={styles.profileModalMeasurementItem}>
+                  <Text style={[styles.profileModalMeasurementValue, { color: colorScheme === 'dark' ? '#7c3aed' : '#7c3aed' }]}>
+                    {profilePreview.height_cm || 'N/A'}
+                  </Text>
+                  <Text style={[styles.profileModalMeasurementLabel, { color: colorScheme === 'dark' ? '#ccc' : '#666' }]}>
+                    Height (cm)
+                  </Text>
+                </View>
+                <View style={styles.profileModalMeasurementItem}>
+                  <Text style={[styles.profileModalMeasurementValue, { color: colorScheme === 'dark' ? '#7c3aed' : '#7c3aed' }]}>
+                    {profilePreview.chest_cm || 'N/A'}
+                  </Text>
+                  <Text style={[styles.profileModalMeasurementLabel, { color: colorScheme === 'dark' ? '#ccc' : '#666' }]}>
+                    Chest (cm)
+                  </Text>
+                </View>
+                <View style={styles.profileModalMeasurementItem}>
+                  <Text style={[styles.profileModalMeasurementValue, { color: colorScheme === 'dark' ? '#7c3aed' : '#7c3aed' }]}>
+                    {profilePreview.waist_cm || 'N/A'}
+                  </Text>
+                  <Text style={[styles.profileModalMeasurementLabel, { color: colorScheme === 'dark' ? '#ccc' : '#666' }]}>
+                    Waist (cm)
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Action Buttons */}
+            <View style={styles.profileModalActions}>
+              <TouchableOpacity
+                style={[styles.profileModalButton, { backgroundColor: '#7c3aed' }]}
+                onPress={() => {
+                  setIsProfilePreviewVisible(false);
+                  router.push({
+                    pathname: '/(tabs)/user-profile',
+                    params: { username: profilePreview.username }
+                  });
+                }}
+              >
+                <Text style={styles.profileModalButtonText}>View Full Profile</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -1729,5 +1851,92 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
     marginTop: 10,
+  },
+  // Profile Preview Modal styles
+  profileModal: {
+    margin: 20,
+    borderRadius: 16,
+    padding: 20,
+    minWidth: 300,
+    maxWidth: '90%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  profileModalHeader: {
+    alignItems: 'center',
+    marginBottom: 20,
+    marginTop: 20,
+  },
+  profileModalAvatar: {
+    marginBottom: 12,
+  },
+  profileModalAvatarImage: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+  },
+  profileModalAvatarPlaceholder: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profileModalUsername: {
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  profileModalBio: {
+    marginBottom: 20,
+  },
+  profileModalBioLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  profileModalBioText: {
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  profileModalMeasurements: {
+    marginBottom: 20,
+  },
+  profileModalMeasurementsLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 12,
+  },
+  profileModalMeasurementsGrid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  profileModalMeasurementItem: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  profileModalMeasurementValue: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  profileModalMeasurementLabel: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  profileModalActions: {
+    marginTop: 10,
+  },
+  profileModalButton: {
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  profileModalButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
