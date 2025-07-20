@@ -1,0 +1,402 @@
+openapi: 3.0.3
+info:
+  title: OnlyFits API
+  version: 0.1.0
+  description: |
+    REST endpoints served by the **onlyfits-api** Cloudflare Worker.
+    • Auth is handled by Clerk bearer-JWTs (`Authorization: Bearer <token>`).  
+    • Images are stored in Cloudflare R2 and delivered via **media.egress.live**.  
+    • Structured data lives in Supabase.
+
+servers:
+  - url: https://api.egress.live
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Post:
+      type: object
+      properties:
+        id:        { type: string, format: uuid }
+        user_id:   { type: string }
+        created_at: { type: string, format: date-time }
+    FeedItem:
+      type: object
+      properties:
+        id:          { type: string, format: uuid }
+        title:       { type: string, description: "Post title/outfit name" }
+        description: { type: string, description: "Post description", nullable: true }
+        author:
+          type: object
+          properties:
+            handle:     { type: string }
+            avatar_url: { type: string, format: uri }
+        created_at:  { type: string, format: date-time }
+        images:
+          type: array
+          items: { type: string, format: uri }
+        likes:        { type: integer }
+        liked_by_me:  { type: boolean }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ClothingItem' }
+          description: "Clothing items with dot positions"
+    ClothingItem:
+      type: object
+      required: [ item_name, brand, price, currency, x, y ]
+      properties:
+        id:           { type: string, format: uuid }
+        item_name:    { type: string, description: "Name of the clothing item" }
+        brand:        { type: string, description: "Brand name" }
+        price:        { type: integer, description: "Price as integer (e.g., 2999 for ¥2999)" }
+        currency:     { type: string, description: "Currency code (e.g., 'JPY')" }
+        link:         { type: string, format: uri, description: "Purchase link", nullable: true }
+        user_desc:    { type: string, description: "User description of the item", nullable: true }
+        sizes:        
+          type: array
+          items: { type: string }
+          description: "Available sizes (e.g., ['S', 'M', 'L'])"
+        x: 
+          type: number
+          format: decimal
+          minimum: 0
+          maximum: 1
+          description: "X position of the dot as decimal (0.0-1.0)"
+        y:
+          type: number
+          format: decimal
+          minimum: 0
+          maximum: 1
+          description: "Y position of the dot as decimal (0.0-1.0)"
+
+paths:
+  /health:
+    get:
+      summary: Health probe
+      responses:
+        "200":
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /protected:
+    get:
+      summary: Simple auth-test endpoint
+      security: [ { BearerAuth: [] } ]
+      responses:
+        "200":
+          description: Greeting for authenticated user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  msg: { type: string }
+
+  /generate-upload-url:
+    post:
+      summary: Create a presigned PUT URL for direct upload to R2
+      security: [ { BearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ contentType ]
+              properties:
+                contentType:
+                  type: string
+                  description: Must start with `image/…`
+                  example: image/jpeg
+      responses:
+        "200":
+          description: Upload URL issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uploadUrl: { type: string, format: uri }
+                  objectKey: { type: string }
+                  expiresIn: { type: integer, example: 600 }
+
+  /upload:
+    post:
+      summary: Upload **one** image (binary body) and auto-create a post
+      security: [ { BearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          image/*:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Post created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  post:  { $ref: '#/components/schemas/Post' }
+                  mediaUrl: { type: string, format: uri }
+
+  /upload-post:
+    post:
+      summary: Upload **multiple images** & metadata → create post
+      description: |
+        *Multipart* request containing one or more **images** files plus
+        text fields `title`, `description`, and an **items** JSON array.
+      security: [ { BearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [ images, title, description ]
+              properties:
+                images:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                title:
+                  type: string
+                description:
+                  type: string
+                items:
+                  description: JSON array of clothing items (see below)
+                  type: string
+            encoding:
+              images: { contentType: image/* }
+      responses:
+        "200":
+          description: Post created with CDN media URLs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  post:   { $ref: '#/components/schemas/Post' }
+                  media:
+                    type: array
+                    items: { type: string, format: uri }
+
+  /posts:
+    post:
+      summary: Legacy single-image post create (objectKey already uploaded)
+      security: [ { BearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ objectKey ]
+              properties:
+                objectKey:
+                  type: string
+      responses:
+        "200":
+          description: Post row
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  post: { $ref: '#/components/schemas/Post' }
+
+  /posts/{id}/like:
+    parameters:
+      - in: path
+        name: id
+        schema: { type: string, format: uuid }
+        required: true
+    post:
+      summary: Like a post
+      security: [ { BearerAuth: [] } ]
+      responses:
+        "200": { description: OK }
+    delete:
+      summary: Remove like
+      security: [ { BearerAuth: [] } ]
+      responses:
+        "200": { description: OK }
+
+  /posts/{id}/view:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      summary: Record a view
+      security: [ { BearerAuth: [] } ]
+      responses:
+        "200": { description: OK }
+
+  /users/{userId}/posts:
+    get:
+      summary: Posts authored by a given user (or "me")
+      security: [ { BearerAuth: [] } ]
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            description: |
+              Clerk user_id or literal "me" for the caller's own posts.
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100 }
+        - name: cursor
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: User post list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  posts:
+                    type: array
+                    items: { $ref: '#/components/schemas/FeedItem' }
+                  next_cursor:
+                    nullable: true
+                    type: string
+                    format: date-time
+
+  /feed:
+    get:
+      summary: Paginated feed (most-recent first)
+      security: [ { BearerAuth: [] } ]
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100 }
+          description: Max posts (default 20)
+        - name: cursor
+          in: query
+          schema: { type: string, format: date-time }
+          description: ISO timestamp of last post from previous page
+      responses:
+        "200":
+          description: Array of feed items
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  feed:
+                    type: array
+                    items: { $ref: '#/components/schemas/FeedItem' }
+                  next_cursor:
+                    nullable: true
+                    type: string
+                    format: date-time
+
+  /profiles/{userId}:
+    get:
+      summary: Get a user profile (own or other)
+      description: >
+        Pass **"me"** to fetch the caller's own profile, or a Clerk `user_id`
+        (e.g. `user_2zrLNVRtBfCL2Lwoqry6wEzFNs5`) to load someone else's.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Profile found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  profile:
+                    type: object
+                    properties:
+                      user_id:     { type: string }
+                      username:    { type: string }
+                      avatar_url:  { type: string, format: uri }
+                      bio:         { type: string, nullable: true }
+                      height_cm:   { type: integer, nullable: true }
+                      chest_cm:    { type: integer, nullable: true }
+                      waist_cm:    { type: integer, nullable: true }
+        '404': { description: Not found }
+
+  /profiles/me:
+    put:
+      summary: Update the caller's own profile
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:    { type: string, description: "Clerk‐tracked handle" }
+                avatar_url:  { type: string, format: uri, description: "Custom avatar URL" }
+                bio:         { type: string }
+                height_cm:   { type: integer }
+                chest_cm:    { type: integer }
+                waist_cm:    { type: integer }
+      responses:
+        '200':
+          description: Updated profile returned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  profile:
+                    type: object
+                    properties:
+                      user_id:     { type: string }
+                      username:    { type: string }
+                      avatar_url:  { type: string, format: uri }
+                      bio:         { type: string, nullable: true }
+                      height_cm:   { type: integer, nullable: true }
+                      chest_cm:    { type: integer, nullable: true }
+                      waist_cm:    { type: integer, nullable: true }
+
+  /clerk-webhook:
+    post:
+      summary: Clerk → Svix webhook endpoint (user.created)
+      description: |
+        **No bearer auth required.**  
+        Verified via `svix-id`, `svix-timestamp`, `svix-signature` headers
+        and `CLERK_WEBHOOK_SECRET`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200": { description: OK }
+        "400": { description: Invalid signature }
+
+security:
+  - BearerAuth: []
